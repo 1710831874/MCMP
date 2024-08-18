@@ -1,103 +1,6 @@
 import torch
 import torch.nn as nn
 
-# 多头注意力
-class MultiHeaded_NonLocalBlock(nn.Module):
-    def __init__(self, in_channels, inter_channels=None, dimension=3, sub_sample=True, bn_layer=True, n_heads=8):
-        super(MultiHeaded_NonLocalBlock, self).__init__()
-
-        assert dimension in [1, 2, 3]
-
-        self.dimension = dimension
-        self.sub_sample = sub_sample
-
-        self.in_channels = in_channels
-        self.inter_channels = inter_channels
-
-        if self.inter_channels is None:
-            self.inter_channels = in_channels // 2
-            if self.inter_channels == 0:
-                self.inter_channels = 1
-
-        if dimension == 3:
-            conv_nd = nn.Conv3d
-            max_pool_layer = nn.MaxPool3d(kernel_size=(1, 2, 2))
-            bn = nn.BatchNorm3d
-        elif dimension == 2:
-            conv_nd = nn.Conv2d
-            max_pool_layer = nn.MaxPool2d(kernel_size=(2, 2))
-            bn = nn.BatchNorm2d
-        else:
-            conv_nd = nn.Conv1d
-            max_pool_layer = nn.MaxPool1d(kernel_size=(2))
-            bn = nn.BatchNorm1d
-
-        self.g = conv_nd(in_channels=self.in_channels, out_channels=self.inter_channels,
-                         kernel_size=1, stride=1, padding=0)
-
-        if bn_layer:
-            # V
-            self.W = nn.Sequential(
-                conv_nd(in_channels=self.inter_channels, out_channels=self.in_channels,
-                        kernel_size=1, stride=1, padding=0),
-                bn(self.in_channels)
-            )
-            nn.init.constant_(self.W[1].weight, 0)
-            nn.init.constant_(self.W[1].bias, 0)
-        else:
-            self.W = conv_nd(in_channels=self.inter_channels, out_channels=self.in_channels,
-                             kernel_size=1, stride=1, padding=0)
-            nn.init.constant_(self.W.weight, 0)
-            nn.init.constant_(self.W.bias, 0)
-
-        # Q
-        self.theta = conv_nd(in_channels=self.in_channels, out_channels=self.inter_channels,
-                             kernel_size=1, stride=1, padding=0)
-        # K
-        self.phi = conv_nd(in_channels=self.in_channels, out_channels=self.inter_channels,
-                           kernel_size=1, stride=1, padding=0)
-
-        if sub_sample:
-            self.g = nn.Sequential(self.g, max_pool_layer)
-            self.phi = nn.Sequential(self.phi, max_pool_layer)
-
-    def forward(self, x, return_nl_map=False):
-        """
-        :param x: (b, c, t, h, w)
-        :param return_nl_map: if True return z, nl_map, else only return z.
-        :return:
-        """
-
-        batch_size = x.size(0)
-
-        # 输入，维度变换
-        g_x = self.g(x).view(batch_size, self.inter_channels, -1)
-        g_x = g_x.permute(0, 2, 1)  # (bs,1,256)
-
-        # Q
-        theta_x = self.theta(x).view(batch_size, self.inter_channels, -1)
-        theta_x = theta_x.permute(0, 2, 1)  # (bs,1,256)
-
-        # K
-        phi_x = self.phi(x).view(batch_size, self.inter_channels, -1)  # (bs,256，1)
-
-        f = torch.matmul(theta_x, phi_x)  # (bs,1,1) 计算相似度矩阵，形状为`(批次大小，空间维度的乘积，空间维度的乘积)`
-        N = f.size(-1)  # 1 获取相似度矩阵的形状。
-        f_div_C = f / N  # (bs,1,1)
-
-        y = torch.matmul(f_div_C, g_x)  # (bs,1,256)  将 f_div_C 矩阵和 g_x 矩阵相乘，得到 y 矩阵，形状为 (batch_size, t*h*w, inter_channels)
-        y = y.permute(0, 2, 1).contiguous()  # (bs,256，1)
-        y = y.view(batch_size, self.inter_channels, *x.size()[2:])  # (bs,256，1)
-
-        # V
-        W_y = self.W(y)  # (bs,512,1)
-
-        z = W_y + x  # (bs,512,1)
-
-        if return_nl_map:
-            return z, f_div_C
-        return z
-
 class MultiHeaded_NONLocalBlock1D(MultiHeaded_NonLocalBlock):
     def __init__(self, in_channels, inter_channels=None, sub_sample=True, bn_layer=True, n_heads=8):
         super(MultiHeaded_NONLocalBlock1D, self).__init__(in_channels,
@@ -107,7 +10,7 @@ class MultiHeaded_NONLocalBlock1D(MultiHeaded_NonLocalBlock):
 
 
 
-# 单头注意力
+# attention
 class _NonLocalBlockND(nn.Module):
     def __init__(self, in_channels, inter_channels=None, dimension=3, sub_sample=True, bn_layer=True):
         super(_NonLocalBlockND, self).__init__()
